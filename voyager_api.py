@@ -43,7 +43,7 @@ class VoyagerClient(threading.Thread):
         self.messages = collections.deque()
 
         self.sock = socket.socket()
-        self.sock.settimeout(0.3)
+        self.sock.settimeout(0.15)
 
         self.heartbeat_events = [
             'WeatherAndSafetyMonitorData',
@@ -52,21 +52,34 @@ class VoyagerClient(threading.Thread):
             'ControlData'
         ]
 
-        self._shut_down = False
+        self._shut_down = threading.Event()
+        self._shut_down.clear()
 
         self._connected = False
 
-        self.handlers = {}
+        self.handlers = {'Signal': {}}
+        self.handler_threads = []
 
         self.cmd = None
 
         self.cmd = VoyagerCommandWrapper(self)
 
-    def shut_down(self):
-        self._shut_down = True
-        while self._connected:
-            pass
-        return True
+    def close(self):
+        self._shut_down.set()
+        log.info("Waiting for threads to shut down")
+        while self._shut_down.is_set():
+            time.sleep(0.5)  # Wait for threads
+
+    def _shut_down_handler(self):
+        if self._shut_down.is_set():
+            log.info("Closing out")
+            while self.handler_threads:
+                self._thread_cleanup()
+            self._send_message(self._encode_message({'method': 'disconnect', "id": self.client_id}))
+            self.sock.close()
+            self._connected = False
+            self._shut_down.clear()
+            return True
 
     def run(self):
         log.info("Connecting")
@@ -79,13 +92,15 @@ class VoyagerClient(threading.Thread):
                 pass
         log.info(f"Version message: {data}")
 
-        while not self._shut_down:
+        while True:
+            if self._shut_down_handler():
+                break
             self._connected = True
             try:
                 data = b''
                 while True:
                     try:
-                        data_chunk = self.sock.recv(512)
+                        data_chunk = self.sock.recv(2048)
                         log.debug(f"Main loop receive: {data_chunk}")
                         data += data_chunk
                     except socket.timeout:
@@ -104,7 +119,7 @@ class VoyagerClient(threading.Thread):
                     dcm = self._decode_message(msg)
 
                     if dcm and not dcm.get('jsonrpc'):
-                        log.info(f"Got: {dcm}".strip())
+                        log.debug(f"Got: {dcm}".strip())
 
                         event = dcm.get('Event', None)
 
@@ -123,15 +138,14 @@ class VoyagerClient(threading.Thread):
                             return
                         else:
                             self._handle_cmd(dcm)
+            self._thread_cleanup()
 
-        log.info("Closing out")
-        self._send_message(self._encode_message({'method': 'disconnect', "id": self.client_id}))
-        self.sock.close()
-        self._connected = False
-
-    def add_handler(self, event_id, callback_func):
+    def add_handler(self, event_id, callback_func, signal=-1, *args, **kwargs):
         log.info(f"Adding handler for event_id: {event_id}, func: {callback_func}")
-        self.handlers[event_id] = callback_func
+        if event_id == 'Signal':
+            self.handlers['Signal'][signal] = Handler('Signal', callback_func, signal=signal, *args, **kwargs)
+        else:
+            self.handlers[event_id] = Handler(event_id, callback_func, *args, **kwargs)
 
     def remove_handler(self, event_id):
         log.info(f"Removing handler for event_id: {event_id}")
@@ -143,12 +157,31 @@ class VoyagerClient(threading.Thread):
             log.debug(f"Message queue full, popped: {self.messages.pop()}")
         self.messages.append(message)
 
+    def _thread_cleanup(self):
+        for index, thread in enumerate(self.handler_threads):
+            if not thread.is_alive():
+                thread.join()
+                log.debug(f"Thread {thread.ident} for {thread.handler.handle} shut down")
+                del self.handler_threads[index]
+
     def _handle_signal(self, message):
         message['CodeMsg'] = self.cmd.get_signal(message['Code'])
         log.debug(f"Adding signal: {message}")
         if len(self.signals) >= self.signals_length:
             log.debug(f"Signal queue full, popped: {self.signals.pop()}")
         self.signals.append(message)
+
+        code = message.get('Code', '')
+        signal_handler = self.handlers['Signal'].get(code)
+        if signal_handler:
+            try:
+                handler_thread = HandlerThread(message, signal_handler)
+                handler_thread.start()
+                self.handler_threads.append(handler_thread)
+            except:
+                pass
+            finally:
+                return
 
     def _handle_log(self, message):
         log.debug(f"Adding log: {message}")
@@ -165,12 +198,16 @@ class VoyagerClient(threading.Thread):
         log.debug(f"_handle_cmd input: {message}")
         event = message.get('Event', '')
 
-        cmd_handler_callback = self.handlers.get(event)
-        if cmd_handler_callback:
+        cmd_handler = self.handlers.get(event)
+        if cmd_handler:
             try:
-                cmd_handler_callback(message)
+                handler_thread = HandlerThread(message, cmd_handler)
+                handler_thread.start()
+                self.handler_threads.append(handler_thread)
             except:
                 pass
+            finally:
+                return
 
         if self.cmd_running:
             cmd_result = self.cmd_running.lstrip('Remote')
@@ -409,19 +446,57 @@ class VoyagerCommandWrapper(object):
         return self._client.send_command('RemoteSetProfile', {'FileName': profile_filename})
 
 
-def setup_logging(write_file=False):
+class Handler(object):
+    def __init__(self, handle, callback_func, signal=-1, *args, **kwargs):
+        self.handle = handle
+        self.callback_func = callback_func
+        self.signal = signal
+        self.args = args
+        self.kwargs = kwargs
+
+        log.error(self.__dict__)
+
+
+class HandlerThread(threading.Thread):
+    def __init__(self,
+                 message,
+                 handler,
+                 group=None,
+                 target=None,
+                 name=None,
+                 args=(),
+                 kwargs={}):
+        super(HandlerThread, self).__init__(group=group, target=target, name=name, *args, **kwargs, daemon=True)
+
+        print(f"Handler thread created for {message} : {handler}")
+
+        self.message = message
+        self.handler = handler
+
+    def run(self):
+        try:
+            log.debug(f"[HandlerThread] Executing thread for handler: {self.handler.handle}, {self.handler.callback_func}")
+            self.handler.callback_func(self.message, *self.handler.args, **self.handler.kwargs)
+            log.debug(f"[HandlerThread] Executed thread for handler: {self.handler.handle}, {self.handler.callback_func}")            
+        except Exception as e:
+            log.error(f"[HandlerThread] Failed to execute: {repr(e)}")
+        return
+
+
+def setup_logging(write_file=False, write_console=True):
     log.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - (%(name)s): [%(levelname)s] %(message)s')
+    formatter = logging.Formatter('%(asctime)s - [%(threadName)s:%(thread)d] (%(name)s): [%(levelname)s] %(message)s')
     if write_file:
         fh = logging.FileHandler('voyager_client.log')
-        fh.setLevel(logging.INFO)
+        fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         log.addHandler(fh)
 
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(formatter)
-    log.addHandler(ch)
+    if write_console:
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.INFO)
+        ch.setFormatter(formatter)
+        log.addHandler(ch)
 
 
 def print_jpg_info(message):
@@ -439,13 +514,14 @@ def print_jpg_info(message):
     print("***\n***\n***\n***\n***")
 
 
-setup_logging()
+if __name__ == "__main__":
+    setup_logging(True)
 
-client = VoyagerClient('172.16.50.50', 5950)
-client.start()
+    client = VoyagerClient('172.16.50.50', 5950)
+    client.start()
 
-client.add_handler('NewJPGReady', print_jpg_info)
+    client.add_handler('NewJPGReady', print_jpg_info)
 
-client.cmd.set_logs('enable')
-client.cmd.set_dashboard('enable')
+    client.cmd.set_logs('enable')
+    client.cmd.set_dashboard('enable')
 

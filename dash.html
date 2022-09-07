@@ -1,0 +1,162 @@
+<html>
+<head>
+  <title>Simple client</title>
+
+  <script src="https://code.jquery.com/jquery-3.5.0.js"></script>
+  <script type="text/javascript">
+
+    var ws;
+    
+    var log_lines = [];
+
+    function init() {
+
+      // Connect to Web Socket
+      ws = new WebSocket("ws://raccsin.space/ws/");
+
+      // Set event handlers.
+      ws.onopen = function() {
+        return;
+      };
+      
+      ws.onmessage = function(e) {
+        // e.data contains received string.
+        const msg = JSON.parse(e.data);
+        output(msg);
+      };
+      
+      ws.onclose = function() {
+        return;
+      };
+
+      ws.onerror = function(e) {
+        output("onerror");
+        console.log(e)
+      };
+
+    }
+    
+    function onCloseClick() {
+      ws.close();
+    }
+    
+    function output(msg) {
+
+      for (const main_key of Object.keys(msg)) {
+        for (const sub_key of Object.keys(msg[main_key])) {
+          var span_id = main_key + '.' + sub_key;
+          if (sub_key == "base64data") {
+            console.log("Got img data");
+            document.getElementById('jpgshot.base64data').src = "data:image/jpg;base64," + msg['jpgshot']['base64data'];
+            document.getElementById('jpgshot.base64data').width = msg['jpgshot']['x_size'];
+            document.getElementById('jpgshot.base64data').height = msg['jpgshot']['y_size'];
+          } else {
+            document.getElementById(span_id).innerHTML = msg[main_key][sub_key];
+          }
+        }
+      }
+    }
+
+  </script>
+</head>
+<body onload="init();">
+  <button onclick="onCloseClick(); return false;">close</button>
+  <center>
+    <table id="main">
+      <tr>
+        <td>
+          <table id="mount">
+            <tr><th><h3>Mount</h3></th></tr>
+            <tr><td>Alt</td><td><span id="mount.alt">NONE</span></td></tr>
+            <tr><td>Az</td><td><span id="mount.az">NONE</span></td></tr>
+            <tr><td>Connected</td><td><span id="mount.conn">NONE</span></td></tr>
+            <tr><td>Dec</td><td><span id="mount.dec">NONE</span></td></tr>
+            <tr><td>RA</td><td><span id="mount.ra">NONE</span></td></tr>
+            <tr><td>Slewing</td><td><span id="mount.slew">NONE</span></td></tr>
+            <tr><td>Tracking</td><td><span id="mount.track">NONE</span></td></tr>
+            <tr><td>Parked</td><td><span id="mount.park">NONE</span></td></tr>
+            <tr><td>Pier</td><td><span id="mount.pier">NONE</span></td></tr>
+            <tr><td>Time to meridian</td><td><span id="mount.meridian">NONE</span></td></tr>
+          </table>
+        </td>
+        <td>
+          <table id="camera">
+            <tr><th><h3>Camera</h3></th></tr>
+            <tr><td>Connected</td><td><span id="camera.conn">NONE</span></td></tr>
+            <tr><td>Cooling</td><td><span id="camera.cooling">NONE</span></td></tr>
+            <tr><td>Power</td><td><span id="camera.coolpower">NONE</span></td></tr>
+            <tr><td>Set point</td><td><span id="camera.coolset">NONE</span></td></tr>
+            <tr><td>Status</td><td><span id="camera.status">NONE</span></td></tr>
+            <tr><td>Current temp</td><td><span id="camera.temp">NONE</span> °C</td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr> 
+        <td>
+          <table id="focuser">
+            <tr><th><h3>Focuser</h3></th></tr>
+            <tr><td>Connected</td><td><span id="focuser.conn">NONE</span></td></tr>
+            <tr><td>Position</td><td><span id="focuser.pos">NONE</span></td></tr>
+            <tr><td>Temp</td><td><span id="focuser.temp">NONE</span> °C</td></tr>
+          </table>
+          <table id="guider">
+            <tr><th><h3>Guider</h3></th></tr>
+            <tr><td>Connected</td><td><span id="guider.conn">NONE</span></td></tr>
+            <tr><td>Status</td><td><span id="guider.status">NONE</span></td></tr>
+            <tr><td>X step</td><td><span id="guider.x">NONE</span></td></tr>
+            <tr><td>Y step</td><td><span id="guider.y">NONE</span></td></tr>
+          </table>
+        </td>
+        <td>
+          <table id="setup">
+            <tr><th><h3>Setup</h3></th></tr>
+            <tr><td>Connected</td><td><span id="setup.conn">NONE</span></td></tr>
+            <tr><td>Dragscript</td><td><span id="setup.ds">NONE</span></td></tr>
+            <tr><td>Sequence</td><td><span id="setup.seq">NONE</span></td></tr>
+            <tr><td>Status</td><td><span id="setup.voyager">NONE</span></td></tr>
+          </table>
+          <table id="sequence">
+            <tr><th><h3>Sequence</h3></th></tr>
+            <tr><td>End</td><td><span id="sequence.end">NONE</span></td></tr>
+            <tr><td>Remain</td><td><span id="sequence.remain">NONE</span></td></tr>
+            <tr><td>Start</td><td><span id="sequence.start">NONE</span></td></tr>
+            <tr><td>Name</td><td><span id="sequence.name">NONE</span></td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="2">
+          <table id='shot'>
+            <tr><th><h3>Current Shot Info</h3></th></tr>
+            <tr><td>Filename</td><td><span id="shot.file">NONE</span></td></tr>
+            <tr><td>Exposure</td><td><span id="shot.exposure">NONE</span></td></tr>
+            <tr><td>Elapsed</td><td><span id="shot.elapsed">NONE</span></td></tr>
+            <tr><td>Elapsed Pct</td><td><span id="shot.elapsedpct">NONE</span>%</td></tr>
+            <tr><td>Status</td><td><span id="shot.status">NONE</span></td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="2">
+          <table id='jpgshot'>
+            <tr><th><h3>Last Shot Info</h3></th></tr>
+            <tr><td>Filename</td><td><span id="jpgshot.file">NONE</span></td></tr>
+            <tr><td>Target</td><td><span id="jpgshot.target">NONE</span></td></tr>
+            <tr><td>Time Saved</td><td><span id="jpgshot.saved">NONE</span></td></tr>
+            <tr><td>Exposure</td><td><span id="jpgshot.exposure">NONE</span></td></tr>
+            <tr><td>Binning</td><td><span id="jpgshot.binning">NONE</span></td></tr>
+            <tr><td>Filter</td><td><span id="jpgshot.filter">NONE</span></td></tr>
+            <tr><td>HFD</td><td><span id="jpgshot.hfd">NONE</span></td></tr>
+            <tr><td>Star Index</td><td><span id="jpgshot.starindex">NONE</span></td></tr>
+            <tr><td>X Size</td><td><span id="jpgshot.x_size">NONE</span></td></tr>
+            <tr><td>Y Size</td><td><span id="jpgshot.y_size">NONE</span></td></tr>
+          </table>
+        </td>
+        <td>
+          <img id="jpgshot.base64data", src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" width="0" height="0" alt="" />
+        </td>
+      </tr>
+    </table>
+  </center>
+</body>
+</html>
